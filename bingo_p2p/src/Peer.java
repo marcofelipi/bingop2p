@@ -10,7 +10,7 @@ public class Peer extends ReceiverAdapter {
     private Set<Integer> bolasSorteadas = new HashSet<>();
     private Map<Address, Cartela> cartelas = new HashMap<>();
     private Cartela minhaCartela;
-    private Address meuEndereco;
+    private Address endereco;
     private Map<Address, String> votosAuditoria = new HashMap<>();
     private Address jogadorAuditado;
 
@@ -27,9 +27,11 @@ public class Peer extends ReceiverAdapter {
         canal.setReceiver(this);
         canal.connect("BingoGrupo");
 
-        meuEndereco = canal.getAddress();
+        endereco = canal.getAddress();
+        
+        //pega o primeiro peer a entrar e deixa ele como coordenador
         Address primeiro = canal.getView().getMembers().get(0);
-        if (meuEndereco.equals(primeiro)) {
+        if (endereco.equals(primeiro)) {
             isCoordenador = true;
             System.out.println("Você é o COORDENADOR.");
         } else {
@@ -59,27 +61,35 @@ public class Peer extends ReceiverAdapter {
 
             if (isCoordenador) {
                 switch (opcao) {
+                    //abre inscricoes
                     case "1":
                         estado = Estados.INSCRICOES;
                         System.out.println("Inscrições abertas.");
                         break;
+                    //distribui cartelas
                     case "2":
                         distribuirCartelas();
                         estado = Estados.EM_ANDAMENTO;
                         break;
+                    //sorteia 1 bola
                     case "3":
                         sortearBola();
                         break;
                     case "4":
+                    //encerra o jogo
                         canal.send(new Message(null, (Object) "FIM"));
                         estado = Estados.ENCERRADO;
                         break;
                 }
             } else {
+                // opcoes do jogador
                 switch (opcao) {
+                    //ver propria cartela
                     case "1":
                         System.out.println(minhaCartela != null ? minhaCartela : "Ainda sem cartela.");
                         break;
+                        
+                    //grita bingo
                     case "2":
                         if (minhaCartela != null && minhaCartela.venceu()) {
                             canal.send(new Message(null, (Object) ("BINGO:" + nome)));
@@ -94,7 +104,7 @@ public class Peer extends ReceiverAdapter {
 
     private void distribuirCartelas() throws Exception {
         for (Address addr : canal.getView().getMembers()) {
-            if (!addr.equals(meuEndereco)) {
+            if (!addr.equals(endereco)) {
                 Cartela c = Cartela.gerar();
                 cartelas.put(addr, c);
                 canal.send(new Message(addr, (Object) ("CARTELA:" + c.toString())));
@@ -143,19 +153,43 @@ public class Peer extends ReceiverAdapter {
                 }
 
             } else if (m.startsWith("AUDITAR:")) {
-                String[] partes = m.split(":", 3);
-                String nomeJogador = partes[1];
-                Cartela c = Cartela.fromString(partes[2]);
+                // Desmembra a mensagem usando a expressão regular para os separadores : e |
+                String[] partes = m.split("[:|]");
+                // partes[0] = "AUDITAR"
+                // partes[1] = nome do jogador
+                // partes[2] = string da cartela
+                // partes[3] = string das bolas sorteadas
 
+                String nomeAuditado = partes[1];
+                Cartela cartelaAuditada = Cartela.fromString(partes[2]);
+
+                // Pega o conjunto de bolas enviado pelo coordenador (fonte da verdade)
+                Set<Integer> bolasOficiais = Cartela.fromString(partes[3]).getNumeros(); // Reutilizando o parser
+
+                System.out.println("Convocado para auditar " + nomeAuditado + ". Cartela: " + cartelaAuditada + ". Bolas oficiais: " + bolasOficiais);
+
+                // REGRA IMPORTANTE: O jogador que gritou bingo não vota.
+                if (this.nome.equals(nomeAuditado)) {
+                    System.out.println("Estou sendo auditado, não vou votar.");
+                    return;
+                }
+
+                // Agora a validação usa o conjunto de bolas enviado pelo coordenador
                 boolean valido = true;
-                for (int n : c.getNumeros()) {
-                    if (!bolasSorteadas.contains(n)) {
+                for (int numeroNaCartela : cartelaAuditada.getNumeros()) {
+                    if (!bolasOficiais.contains(numeroNaCartela)) {
                         valido = false;
                         break;
                     }
                 }
 
-                canal.send(new Message(null, (Object) (valido ? "SIM:" : "NAO:") + nomeJogador));
+                if (valido) {
+                    System.out.println("Meu voto: SIM para " + nomeAuditado);
+                    canal.send(new Message(null, (Object) ("SIM:" + nomeAuditado)));
+                } else {
+                    System.out.println("Meu voto: NAO para " + nomeAuditado);
+                    canal.send(new Message(null, (Object) ("NAO:" + nomeAuditado)));
+                }
 
             } else if (m.startsWith("SIM:") || m.startsWith("NAO:")) {
                 if (!isCoordenador || estado != Estados.AUDITORIA) return;
@@ -198,7 +232,10 @@ public class Peer extends ReceiverAdapter {
         }
 
         Cartela c = cartelas.get(jogadorAuditado);
-        canal.send(new Message(null, (Object) "AUDITAR:" + nomeJogador + ":" + c.toString()));
+        String bolasSorteadasStr = bolasSorteadas.toString();
+        
+        String msgAuditoria = "Auditar: "+nomeJogador+"|"+c.toString()+"|"+bolasSorteadasStr;
+        canal.send(new Message(null, (Object) msgAuditoria));
         System.out.println("Auditoria iniciada para " + nomeJogador);
     }
 }
