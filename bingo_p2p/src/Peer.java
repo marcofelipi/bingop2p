@@ -4,97 +4,102 @@ import java.util.*;
 public class Peer extends ReceiverAdapter {
 
     private JChannel canal;
-    private String nome;
-    private boolean isCoordenador = false;
+    private String meuNome;
+    private boolean souCoordenador = false;
     private Estados estado = Estados.INATIVO;
-    private Set<Integer> bolasSorteadas = new HashSet<>();
-    private Map<Address, Cartela> cartelas = new HashMap<>();
+
+    private Set<Integer> bolasJaSorteadas = new HashSet<>();
+    private Map<Address, Cartela> cartelasJogadores = new HashMap<>();
     private Cartela minhaCartela;
-    private Address endereco;
-    private Map<Address, String> votosAuditoria = new HashMap<>();
-    private Address jogadorAuditado;
+    private Address meuEndereco;
+    private View ultimaView;
+
+    private Map<Address, String> votos = new HashMap<>();
+    private Address jogadorQueGritouBingo;
+    private Set<Address> eliminados = new HashSet<>();
+    private boolean fuiEliminado = false;
 
     public static void main(String[] args) throws Exception {
         new Peer().iniciar();
     }
 
     public void iniciar() throws Exception {
-        Scanner scanner = new Scanner(System.in);
+        Scanner entrada = new Scanner(System.in);
         System.out.print("Digite seu nome: ");
-        nome = scanner.nextLine();
+        meuNome = entrada.nextLine();
 
         canal = new JChannel();
         canal.setReceiver(this);
-        canal.connect("BingoGrupo");
+        canal.connect("GrupoBingo");
 
-        endereco = canal.getAddress();
-        
-        //pega o primeiro peer a entrar e deixa ele como coordenador
-        Address primeiro = canal.getView().getMembers().get(0);
-        if (endereco.equals(primeiro)) {
-            isCoordenador = true;
-            System.out.println("Você é o COORDENADOR.");
-        } else {
-            System.out.println("Você é um JOGADOR.");
-        }
+        meuEndereco = canal.getAddress();
 
-        menu(scanner);
+        menu(entrada);
         canal.close();
     }
 
-    private void menu(Scanner scanner) throws Exception {
+    private void menu(Scanner entrada) throws Exception {
         while (true) {
             if (estado == Estados.ENCERRADO) return;
+            if (estado == Estados.AGUARDANDO) {
+                System.out.println("Esperando nova rodada...");
+                continue;
+            }
 
-            System.out.println("\nMenu " + (isCoordenador ? "Coordenador" : "Jogador"));
-            if (isCoordenador) {
+            System.out.println("\nMenu - " + (souCoordenador ? "Coordenador" : "Jogador"));
+
+            if (souCoordenador) {
                 System.out.println("1 - Abrir inscrições");
-                System.out.println("2 - Iniciar jogo");
-                System.out.println("3 - Sortear bola");
+                System.out.println("2 - Começar jogo");
+                System.out.println("3 - Sortear número");
                 System.out.println("4 - Encerrar jogo");
             } else {
-                System.out.println("1 - Ver cartela");
+                System.out.println("1 - Ver minha cartela");
                 System.out.println("2 - Gritar BINGO!");
             }
-            System.out.print("> ");
-            String opcao = scanner.nextLine();
 
-            if (isCoordenador) {
+            System.out.print("> ");
+            String opcao = entrada.nextLine();
+
+            if (souCoordenador) {
                 switch (opcao) {
-                    //abre inscricoes
                     case "1":
+                        if(estado == Estados.EM_ANDAMENTO){
+                            System.out.println("Termine o jogo em andamento!");
+                            break;
+                        }
                         estado = Estados.INSCRICOES;
-                        System.out.println("Inscrições abertas.");
+                        System.out.println("Inscrições abertas!");
                         break;
-                    //distribui cartelas
                     case "2":
-                        distribuirCartelas();
+                        if(estado == Estados.EM_ANDAMENTO){
+                            System.out.println("Jogo já está em andamento.");
+                            break;
+                        }
+                        enviarCartelas();
                         estado = Estados.EM_ANDAMENTO;
                         break;
-                    //sorteia 1 bola
                     case "3":
-                        sortearBola();
+                        sortearNumero();
                         break;
                     case "4":
-                    //encerra o jogo
-                        canal.send(new Message(null, (Object) "FIM"));
+                        canal.send(new Message(null, "FIM"));
                         estado = Estados.ENCERRADO;
                         break;
                 }
             } else {
-                // opcoes do jogador
                 switch (opcao) {
-                    //ver propria cartela
                     case "1":
-                        System.out.println(minhaCartela != null ? minhaCartela : "Ainda sem cartela.");
+                        System.out.println(minhaCartela != null ? minhaCartela : "Sem cartela ainda.");
                         break;
-                        
-                    //grita bingo
                     case "2":
-                        if (minhaCartela != null && minhaCartela.venceu()) {
-                            canal.send(new Message(null, (Object) ("BINGO:" + nome)));
+                        if (fuiEliminado) {
+                            System.out.println("Você foi eliminado nesta rodada.");
+                        } else if (minhaCartela != null) {
+                            String mensagem = "BINGO:" + meuNome + "|" + minhaCartela;
+                            canal.send(new Message(null, mensagem));
                         } else {
-                            System.out.println("Você ainda não venceu!");
+                            System.out.println("Você ainda não tem cartela.");
                         }
                         break;
                 }
@@ -102,117 +107,203 @@ public class Peer extends ReceiverAdapter {
         }
     }
 
-    private void distribuirCartelas() throws Exception {
-        for (Address addr : canal.getView().getMembers()) {
-            if (!addr.equals(endereco)) {
-                Cartela c = Cartela.gerar();
-                cartelas.put(addr, c);
-                canal.send(new Message(addr, (Object) ("CARTELA:" + c.toString())));
+    @Override
+    public void viewAccepted(View novaView) {
+        if (meuEndereco == null) meuEndereco = canal.getAddress();
+
+        if (ultimaView == null) {
+            System.out.println("Entrou no grupo: " + novaView);
+            if (meuEndereco.equals(novaView.getMembers().get(0))) {
+                System.out.println("Você é o COORDENADOR.");
+                souCoordenador = true;
+            } else {
+                System.out.println("Você é um JOGADOR.");
+            }
+            ultimaView = novaView;
+            return;
+        }
+
+        Address coordAntigo = ultimaView.getMembers().get(0);
+        if (!novaView.getMembers().contains(coordAntigo)) {
+            Address novoCoord = novaView.getMembers().get(0);
+            if (meuEndereco.equals(novoCoord)) {
+                System.out.println("Assumindo como novo coordenador. Solicitando estado...");
+                try {
+                    canal.send(new Message(null, "ENVIAR_ESTADO"));
+                } catch (Exception ex) {
+                    System.getLogger(Peer.class.getName()).log(System.Logger.Level.ERROR, (String) null, ex);
+                }
+                souCoordenador = true;
+                minhaCartela = null;
+                fuiEliminado = false;
+                estado = Estados.EM_ANDAMENTO;
             }
         }
-        System.out.println("Cartelas distribuídas.");
+        ultimaView = novaView;
+    }
+    
+    private void enviarCartelas() throws Exception {
+        if (estado != Estados.INSCRICOES) {
+            System.out.println("Inscrições não estão abertas!");
+            return;
+        }
+
+        // Fecha as inscrições
+        estado = Estados.EM_ANDAMENTO;
+        System.out.println("Inscrições fechadas. Gerando cartelas...");
+
+        // Limpa cartelas anteriores
+        cartelasJogadores.clear();
+        bolasJaSorteadas.clear();
+        eliminados.clear();
+        fuiEliminado = false;
+
+        // Gera e envia cartelas para todos (incluindo coordenador)
+        for (Address addr : canal.getView().getMembers()) {
+            Cartela nova = Cartela.gerar();
+            cartelasJogadores.put(addr, nova);
+
+            // Envia a cartela identificando o dono pelo Address
+            String mensagem = "CARTELA_PARA:" + nova;
+            canal.send(new Message(addr, mensagem));
+
+            System.out.println("Cartela enviada para " + addr);
+        }
+
+        minhaCartela = cartelasJogadores.get(meuEndereco);
+        System.out.println("Cartelas distribuídas! Jogo iniciado.");
     }
 
-    private void sortearBola() throws Exception {
+    private void sortearNumero() throws Exception {
         if (estado != Estados.EM_ANDAMENTO) return;
 
-        int bola;
+        int numero;
         do {
-            bola = new Random().nextInt(10) + 1;
-        } while (bolasSorteadas.contains(bola));
+            numero = new Random().nextInt(10) + 1;
+        } while (bolasJaSorteadas.contains(numero));
 
-        bolasSorteadas.add(bola);
-        canal.send(new Message(null, (Object) ("BOLA:" + bola)));
-        System.out.println("Bola sorteada: " + bola);
+        bolasJaSorteadas.add(numero);
+        canal.send(new Message(null, "NUMERO:" + numero));
+        System.out.println("Número sorteado: " + numero);
     }
 
     @Override
     public void receive(Message msg) {
-        String m = msg.getObject().toString();
+        String conteudo = msg.getObject().toString();
 
         try {
-            if (m.startsWith("CARTELA:")) {
-                minhaCartela = Cartela.fromString(m.replace("CARTELA:", "").trim());
-                System.out.println("Recebeu cartela: " + minhaCartela);
-
-            } else if (m.startsWith("BOLA:")) {
-                int bola = Integer.parseInt(m.replace("BOLA:", "").trim());
-                if (minhaCartela != null) minhaCartela.registrarBola(bola);
-                bolasSorteadas.add(bola);
-                System.out.println("Saiu bola: " + bola);
-
-            } else if (m.startsWith("BINGO:")) {
-                String nomeJogador = m.split(":")[1];
-                Address enderecoJogador = msg.getSrc(); // <--- CAPTURE O ENDEREÇO AQUI
-
-                System.out.println("⚠ Jogador " + nomeJogador + " (" + enderecoJogador + ") gritou BINGO!");
-
-                if (isCoordenador) {
-                    // Passe o endereço e o nome para a auditoria
-                    iniciarAuditoria(enderecoJogador, nomeJogador);
+            if (conteudo.startsWith("CARTELA:")) {
+                Cartela cartela = Cartela.deTexto(conteudo.replace("CARTELA:", ""));
+                minhaCartela = cartela;
+                System.out.println("\n--- SUA CARTELA ---");
+                System.out.println("Cartela: " + minhaCartela);
+                System.out.println("------------------");
+            
+            } else if (conteudo.startsWith("CARTELA_RECUPERADA:")) {
+                if (souCoordenador) {
+                    Address jogador = msg.getSrc();
+                    Cartela cartela = Cartela.deTexto(conteudo.replace("CARTELA_RECUPERADA:", ""));
+                    cartelasJogadores.put(jogador, cartela);
                 }
 
-            } else if (m.startsWith("AUDITAR:")) {
-                // Desmembra a mensagem usando a expressão regular para os separadores : e |
-                String[] partes = m.split("[:|]");
-                // partes[0] = "AUDITAR"
-                // partes[1] = nome do jogador
-                // partes[2] = string da cartela
-                // partes[3] = string das bolas sorteadas
-
-                String nomeAuditado = partes[1];
-                Cartela cartelaAuditada = Cartela.fromString(partes[2]);
-
-                // Pega o conjunto de bolas enviado pelo coordenador (fonte da verdade)
-                Set<Integer> bolasOficiais = Cartela.fromString(partes[3]).getNumeros(); // Reutilizando o parser
-
-                System.out.println("Convocado para auditar " + nomeAuditado + ". Cartela: " + cartelaAuditada + ". Bolas oficiais: " + bolasOficiais);
-
-                // REGRA IMPORTANTE: O jogador que gritou bingo não vota.
-                if (this.nome.equals(nomeAuditado)) {
-                    System.out.println("Estou sendo auditado, não vou votar.");
-                    return;
-                }
-
-                // Agora a validação usa o conjunto de bolas enviado pelo coordenador
-                boolean valido = true;
-                for (int numeroNaCartela : cartelaAuditada.getNumeros()) {
-                    if (!bolasOficiais.contains(numeroNaCartela)) {
-                        valido = false;
-                        break;
+            } else if (conteudo.startsWith("BOLAS_RECUPERADAS:")) {
+                if (souCoordenador) {
+                    String lista = conteudo.replace("BOLAS_RECUPERADAS:", "").replaceAll("[\\[\\] ]", "");
+                    String[] partes = lista.split(",");
+                    for (String num : partes) {
+                        if (!num.isEmpty()){
+                            bolasJaSorteadas.add(Integer.valueOf(num));
+                        }
                     }
                 }
+            } else if (conteudo.startsWith("NUMERO:")) {
+                int num = Integer.parseInt(conteudo.replace("NUMERO:", ""));
+                if (minhaCartela != null) minhaCartela.marcar(num);
+                bolasJaSorteadas.add(num);
+                System.out.println("Saiu o número: " + num);
 
-                if (valido) {
-                    System.out.println("Meu voto: SIM para " + nomeAuditado);
-                    canal.send(new Message(null, (Object) ("SIM:" + nomeAuditado)));
-                } else {
-                    System.out.println("Meu voto: NAO para " + nomeAuditado);
-                    canal.send(new Message(null, (Object) ("NAO:" + nomeAuditado)));
+            } else if (conteudo.startsWith("BINGO:")) {
+                String[] partes = conteudo.split("[:|]");
+                String nome = partes[1];
+                Cartela cartela = Cartela.deTexto(partes[2]);
+                Address jogador = msg.getSrc();
+
+                System.out.println(nome + " gritou BINGO! Cartela: " + cartela);
+
+                if (souCoordenador && !eliminados.contains(jogador)) {
+                    comecarAuditoria(jogador, nome, cartela);
                 }
 
-            } else if (m.startsWith("SIM:") || m.startsWith("NAO:")) {
-                if (!isCoordenador || estado != Estados.AUDITORIA) return;
-                Address de = msg.getSrc();
-                votosAuditoria.put(de, m.startsWith("SIM") ? "SIM" : "NAO");
+            } else if (conteudo.startsWith("AUDITAR:")) {
+                String[] partes = conteudo.split("[:|]");
+                String nome = partes[1];
+                Cartela cartela = Cartela.deTexto(partes[2]);
+                Set<Integer> bolas = Cartela.deTexto(partes[3]).getNumeros();
 
-                int total = canal.getView().getMembers().size() - 1;
-                if (votosAuditoria.size() >= total) {
-                    long votosSim = votosAuditoria.values().stream().filter(v -> v.equals("SIM")).count();
-                    if (votosSim > total / 2) {
-                        System.out.println("BINGO confirmado!");
-                        canal.send(new Message(null, (Object) "FIM"));
+                if (meuNome.equals(nome)) {
+                    System.out.println("Aguardando votação dos outros jogadores...");
+                    return; // não voto em mim mesmo
+                }
+
+                // Mostra informações para votação
+                System.out.println("\n--- AUDITORIA ---");
+                System.out.println("Jogador " + nome + " gritou BINGO!");
+                System.out.println("Cartela do jogador: " + cartela);
+                System.out.println("Números sorteados: " + bolas);
+
+                // Solicita voto
+                System.out.println("Você acredita que o BINGO é válido? (S/N)");
+                System.out.print("> ");
+
+                // Lê a resposta do terminal
+                Scanner scanner = new Scanner(System.in);
+                String resposta = scanner.nextLine().toUpperCase();
+
+                // Valida a entrada
+                while (!resposta.equals("S") && !resposta.equals("N")) {
+                    System.out.println("Por favor, digite S (Sim) ou N (Não):");
+                    System.out.print("> ");
+                    resposta = scanner.nextLine().toUpperCase();
+                }
+
+                // Envia o voto
+                String voto = resposta.equals("S") ? "SIM:" : "NAO:";
+                canal.send(new Message(null, voto + nome));
+
+            } else if (conteudo.startsWith("SIM:") || conteudo.startsWith("NAO:")) {
+                if (!souCoordenador || estado != Estados.AUDITORIA) return;
+
+                String nome = conteudo.substring(4);
+                votos.put(msg.getSrc(), conteudo.startsWith("SIM") ? "SIM" : "NAO");
+
+                System.out.println("Recebido voto " + conteudo.substring(0, 3) + " de " + nome);
+
+                int totalJogadores = ultimaView.getMembers().size() - 2; // -1 para o coordenador, -1 para o jogador que gritou bingo
+                if (totalJogadores <= 0) totalJogadores = 1;
+
+                if (votos.size() >= totalJogadores) {
+                    long sim = votos.values().stream().filter(v -> v.equals("SIM")).count();
+                    if (sim > totalJogadores / 2.0) {
+                        System.out.println("BINGO confirmado! Jogo encerrado.");
+                        canal.send(new Message(null, "FIM"));
                         estado = Estados.ENCERRADO;
                     } else {
-                        System.out.println("Jogador eliminado. Bingo inválido.");
-                        cartelas.remove(jogadorAuditado);
+                        System.out.println("Bingo falso! Jogador eliminado.");
+                        eliminados.add(jogadorQueGritouBingo);
+                        cartelasJogadores.remove(jogadorQueGritouBingo);
+                        canal.send(new Message(jogadorQueGritouBingo, "ELIMINADO"));
                         estado = Estados.EM_ANDAMENTO;
                     }
+                    votos.clear();
                 }
 
-            } else if (m.equals("FIM")) {
-                System.out.println("Jogo encerrado.");
-                estado = Estados.ENCERRADO;
+            } else if (conteudo.equals("FIM")) {
+                System.out.println("O jogo acabou.");
+                estado = Estados.INATIVO;
+
+            } else if (conteudo.equals("ELIMINADO")) {
+                System.out.println("Você foi eliminado dessa rodada!");
+                fuiEliminado = true;
             }
 
         } catch (Exception e) {
@@ -220,22 +311,17 @@ public class Peer extends ReceiverAdapter {
         }
     }
 
-    private void iniciarAuditoria(Address enderecoJogador, String nomeJogador) throws Exception {
+    private void comecarAuditoria(Address jogador, String nome, Cartela cartela) throws Exception {
         estado = Estados.AUDITORIA;
-        votosAuditoria.clear();
-        jogadorAuditado = enderecoJogador;
+        votos.clear();
+        jogadorQueGritouBingo = jogador;
 
-        if (jogadorAuditado == null) {
-            System.out.println("Jogador não encontrado para auditoria.");
-            estado = Estados.EM_ANDAMENTO;
-            return;
+        String msg = "AUDITAR:" + nome + "|" + cartela + "|" + bolasJaSorteadas;
+        for (Address addr : canal.getView().getMembers()) {
+            if (!addr.equals(meuEndereco) && !addr.equals(jogador)) {
+                canal.send(new Message(addr, msg));
+            }
         }
-
-        Cartela c = cartelas.get(jogadorAuditado);
-        String bolasSorteadasStr = bolasSorteadas.toString();
-        
-        String msgAuditoria = "Auditar: "+nomeJogador+"|"+c.toString()+"|"+bolasSorteadasStr;
-        canal.send(new Message(null, (Object) msgAuditoria));
-        System.out.println("Auditoria iniciada para " + nomeJogador);
     }
+
 }

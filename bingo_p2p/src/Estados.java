@@ -3,5 +3,6 @@ public enum Estados {
     INSCRICOES,
     EM_ANDAMENTO,
     AUDITORIA,
+    AGUARDANDO,
     ENCERRADO
 }

@@ -1,8 +1,8 @@
 import java.util.*;
 
 public class Cartela {
-    private Set<Integer> numeros;
-    private Set<Integer> marcados = new HashSet<>();
+    private Set<Integer> numeros;       // Números da cartela
+    private Set<Integer> marcados = new HashSet<>(); // Números já sorteados
 
     public Cartela(Set<Integer> numeros) {
         this.numeros = numeros;
@@ -12,18 +12,18 @@ public class Cartela {
         Random r = new Random();
         Set<Integer> nums = new HashSet<>();
         while (nums.size() < 5) {
-            nums.add(r.nextInt(10) + 1); // números de 1 a 10
+            nums.add(r.nextInt(10) + 1); // Números de 1 a 10
         }
         return new Cartela(nums);
     }
 
-    public void registrarBola(int bola) {
-        if (numeros.contains(bola)) {
-            marcados.add(bola);
+    public void marcar(int numero) {
+        if (numeros.contains(numero)) {
+            marcados.add(numero);
         }
     }
 
-    public boolean venceu() {
+    public boolean estaCompleta() {
         return marcados.containsAll(numeros);
     }
 
@@ -36,13 +36,13 @@ public class Cartela {
         return numeros.toString();
     }
 
-    public static Cartela fromString(String data) {
-        data = data.replaceAll("[\\[\\] ]", "");
-        String[] partes = data.split(",");
-        Set<Integer> nums = new HashSet<>();
-        for (String p : partes) {
-            nums.add(Integer.parseInt(p));
+    public static Cartela deTexto(String texto) {
+        texto = texto.replaceAll("[\\[\\]\\s]", "");
+        String[] partes = texto.split(",");
+        Set<Integer> numeros = new HashSet<>();
+        for (String parte : partes) {
+            numeros.add(Integer.parseInt(parte));
         }
-        return new Cartela(nums);
+        return new Cartela(numeros);
     }
 }
