@@ -23,6 +23,8 @@ public class Peer extends ReceiverAdapter {
     
     private int respostasDeEstadoRecebidas = 0;
     private final Map<Address, String> mapaDeNomes = new HashMap<>();
+    private final Object lockAuditoria = new Object();
+
 
     private String getNome(Address addr) {
         if (addr == null) return "N/A";
@@ -146,10 +148,11 @@ public class Peer extends ReceiverAdapter {
         estado = Estados.INATIVO;
         bolasJaSorteadas.clear();
         cartelasJogadores.clear();
+        eliminados.clear();
         minhaCartela = null;
         votos.clear();
         jogadorQueGritouBingo = null;
-        fuiEliminado = eliminados.contains(meuEndereco.toString());
+        fuiEliminado = false;
         respostasDeEstadoRecebidas = 0;
     }
 
@@ -220,7 +223,7 @@ public class Peer extends ReceiverAdapter {
             if (payload instanceof String && ((String)payload).startsWith("ANUNCIO_NOME:")) {
                 String nomeRecebido = ((String)payload).substring("ANUNCIO_NOME:".length());
                 mapaDeNomes.put(msg.getSrc(), nomeRecebido);
-                System.out.println("[INFO] " + getNome(msg.getSrc()) + " ("+msg.getSrc()+") esta no grupo.");
+                System.out.println("[INFO] " + getNome(msg.getSrc()) + " esta no grupo.");
                 return;
             }
             
@@ -299,44 +302,55 @@ public class Peer extends ReceiverAdapter {
                     canal.send(new Message(null, votoMsg));
 
                 } else if (conteudo.startsWith("SIM:") || conteudo.startsWith("NAO:")) {
-                    if (!souCoordenador || estado != Estados.AUDITORIA) return;
+                    if (!souCoordenador) return;
 
-                    votos.put(msg.getSrc(), conteudo.startsWith("SIM") ? "SIM" : "NAO");
-                    System.out.println("Voto computado de " + getNome(msg.getSrc()) + ". Total de votos: " + votos.size());
+                    synchronized (lockAuditoria) {
+                        if (estado != Estados.AUDITORIA || jogadorQueGritouBingo == null) {
+                            return;
+                        }
 
-                    int votantesEsperados = ultimaView.getMembers().size() - 1;
+                        votos.put(msg.getSrc(), conteudo.startsWith("SIM") ? "SIM" : "NAO");
+                        System.out.println("Voto computado de " + getNome(msg.getSrc()) + ". Total de votos: " + votos.size());
 
-                    // <-- CORREÇÃO DA CONDIÇÃO DE CORRIDA
-                    if (votos.size() >= votantesEsperados) {
-                        // Copia os dados necessários e limpa o estado de votação IMEDIATAMENTE
-                        // para evitar que esta lógica seja executada novamente por um voto atrasado.
-                        Address jogadorAuditado = jogadorQueGritouBingo;
-                        long sim = votos.values().stream().filter(v -> v.equals("SIM")).count();
-                        long totalVotos = votos.size();
+                        int votantesEsperados = ultimaView.getMembers().size() - 1;
 
-                        // Limpa o estado para a próxima
-                        votos.clear();
-                        jogadorQueGritouBingo = null;
+                        if (votos.size() >= votantesEsperados) {
+                            long sim = votos.values().stream().filter(v -> v.equals("SIM")).count();
+                            
+                            Address jogadorAuditado = jogadorQueGritouBingo;
 
-                        System.out.println("\n================ RESULTADO DA AUDITORIA ================");
-                        System.out.println("Total de Votos 'SIM': " + sim + " de " + totalVotos);
-                        
-                        if (sim > votantesEsperados / 2.0) {
-                            System.out.println("BINGO CONFIRMADO! O vencedor e " + getNome(jogadorAuditado) + "!");
-                            canal.send(new Message(null, "RESET"));
-                        } else {
-                            System.out.println("BINGO FALSO! O jogador " + getNome(jogadorAuditado) + " foi penalizado.");
-                            eliminados.add(jogadorAuditado.toString());
-                            canal.send(new Message(jogadorAuditado, "ELIMINADO"));
-                            canal.send(new Message(null, "CONTINUAR_JOGO"));
+                            votos.clear();
+                            jogadorQueGritouBingo = null;
+
+                            System.out.println("\n================ RESULTADO DA AUDITORIA ================");
+                            System.out.println("Total de Votos 'SIM': " + sim + " de " + (votantesEsperados));
+                            
+                            if (sim > votantesEsperados / 2.0) {
+                                System.out.println("BINGO CONFIRMADO! O vencedor e " + getNome(jogadorAuditado) + "!");
+                                // <-- MUDANÇA FINAL: Envia mensagem de parabéns ao vencedor
+                                canal.send(new Message(jogadorAuditado, "VOCE_GANHOU"));
+                                // Envia o RESET para todos os outros um pouco depois
+                                Thread.sleep(100); // Pequeno delay para a mensagem de vitória chegar primeiro
+                                canal.send(new Message(null, "RESET"));
+                            } else {
+                                System.out.println("BINGO FALSO! O jogador " + getNome(jogadorAuditado) + " foi penalizado.");
+                                eliminados.add(jogadorAuditado.toString());
+                                canal.send(new Message(jogadorAuditado, "ELIMINADO"));
+                                canal.send(new Message(null, "CONTINUAR_JOGO"));
+                            }
                         }
                     }
-                } else if (conteudo.equals("ELIMINADO")) {
+                } else if (conteudo.equals("VOCE_GANHOU")) { // <-- MUDANÇA FINAL: Handler para a mensagem de vitória
+                    System.out.println("\n***************************************************");
+                    System.out.println(">>> PARABENS! SEU BINGO FOI VALIDADO! VOCE GANHOU! <<<");
+                    System.out.println("***************************************************");
+                }
+                else if (conteudo.equals("ELIMINADO")) {
                     System.out.println("\n>>> VOCE FOI ELIMINADO DESTA RODADA POR UM BINGO FALSO! <<<");
                     fuiEliminado = true;
                     minhaCartela = null;
                 } else if (conteudo.equals("CONTINUAR_JOGO")) {
-                     System.out.println("A auditoria falhou. O jogo continua...");
+                     System.out.println("O bingo foi declarado FALSO pelo grupo. O jogo continua...");
                      estado = Estados.EM_ANDAMENTO;
                      votos.clear();
                      jogadorQueGritouBingo = null;
