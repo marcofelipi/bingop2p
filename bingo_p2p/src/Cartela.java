@@ -1,9 +1,14 @@
+import java.io.Serializable;
 import java.util.*;
 
-public class Cartela {
-    private Set<Integer> numeros;       // Números da cartela
-    private Set<Integer> marcados = new HashSet<>(); // Números já sorteados
+public class Cartela implements Serializable { // <-- ADICIONAR "implements Serializable"
 
+    private static final long serialVersionUID = 1L; // <-- ADICIONAR ESTA LINHA
+
+    private Set<Integer> numeros;
+    private transient Set<Integer> marcados = new HashSet<>(); // transient para não ser enviado
+
+    // O resto da classe continua exatamente igual...
     public Cartela(Set<Integer> numeros) {
         this.numeros = numeros;
     }
@@ -12,19 +17,20 @@ public class Cartela {
         Random r = new Random();
         Set<Integer> nums = new HashSet<>();
         while (nums.size() < 5) {
-            nums.add(r.nextInt(10) + 1); // Números de 1 a 10
+            nums.add(r.nextInt(10) + 1);
         }
         return new Cartela(nums);
     }
 
     public void marcar(int numero) {
+        if (marcados == null) marcados = new HashSet<>();
         if (numeros.contains(numero)) {
             marcados.add(numero);
         }
     }
 
-    public boolean estaCompleta() {
-        return marcados.containsAll(numeros);
+    public boolean checarCompleta(Set<Integer> bolasSorteadas) {
+        return bolasSorteadas.containsAll(this.numeros);
     }
 
     public Set<Integer> getNumeros() {
@@ -33,7 +39,9 @@ public class Cartela {
 
     @Override
     public String toString() {
-        return numeros.toString();
+        List<Integer> sortedList = new ArrayList<>(numeros);
+        Collections.sort(sortedList);
+        return sortedList.toString().replaceAll("[\\[\\]\\s]", "");
     }
 
     public static Cartela deTexto(String texto) {
@@ -41,7 +49,9 @@ public class Cartela {
         String[] partes = texto.split(",");
         Set<Integer> numeros = new HashSet<>();
         for (String parte : partes) {
-            numeros.add(Integer.parseInt(parte));
+            if (!parte.isEmpty()) {
+                numeros.add(Integer.parseInt(parte.trim()));
+            }
         }
         return new Cartela(numeros);
     }
